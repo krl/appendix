@@ -1,0 +1,16 @@
+[package]
+authors = ["Kristoffer Ström <kristoffer@rymdkoloni.se>"]
+edition = "2018"
+name = "appendix2"
+version = "0.1.0"
+
+[dependencies]
+arrayvec = "0.4.10"
+lazy_static = "1.2.0"
+memmap = "0.7.0"
+parking_lot = "0.7.1"
+seahash = "3.0.5"
+tempfile = "3.0.5"
+
+[dev-dependencies]
+rand = "0.6.4"
