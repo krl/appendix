@@ -19,7 +19,7 @@ const NUM_SHARDS: usize = 1024;
 const PAGE_SIZE: usize = 4096;
 const FIRST_LANE_PAGES: usize = 64;
 
-// marker struct for shard-mutex
+// marker struct for shard-mutexes
 struct Shard;
 
 lazy_static! {
@@ -121,30 +121,98 @@ impl<K: Hash + Copy + PartialEq + fmt::Debug, V: Hash + Copy + fmt::Debug>
     Index<K, V>
 {
     pub fn new<P: AsRef<Path>>(path: &P) -> io::Result<Self> {
-        let lanes = ArrayVec::new();
-        // for i in 0..NUM_LANES {
-        //     let path: &Path = path.as_ref();
-        //     let mut pathbuf = PathBuf::from(path);
-        //     pathbuf.push(&format!("{}", i));
-        //     println!("creating {:?}", pathbuf);
-        //     let file = OpenOptions::new()
-        //         .read(true)
-        //         .write(true)
-        //         .create(true)
-        //         .open(&pathbuf)?;
-        //     file.set_len(1);
-        //     unsafe { maps.push(MmapMut::map_mut(&file)?) }
-        // }
+        let mut lanes = ArrayVec::new();
 
+        // check for lane files already on disk
+        for n in 0..NUM_LANES {
+            let mut pathbuf = PathBuf::from(path.as_ref());
+            pathbuf.push(&format!("{:02x}", n));
+
+            if pathbuf.exists() {
+                let file =
+                    OpenOptions::new().read(true).write(true).open(&pathbuf)?;
+
+                let lane_pages = Self::lane_pages(n);
+                let file_len = PAGE_SIZE as u64 * lane_pages as u64;
+                file.set_len(file_len);
+                unsafe { lanes.push(MmapMut::map_mut(&file)?) };
+            }
+        }
+
+        // find the number of already occupied pages
+        let mut num_pages = 0;
+        if let Some(last) = lanes.last() {
+            // help the type inferer along a bit.
+            let last: &MmapMut = last;
+
+            // add up pages of all but the last lane, since they are all full
+            let mut full_pages = 0;
+            for n in 0..lanes.len().saturating_sub(1) {
+                println!("lane {}, pages {}", n, Self::lane_pages(n));
+                full_pages += Self::lane_pages(n)
+            }
+
+            // do a binary search to find the last populated page in the last lane
+            let mut low_bound = 0;
+            let mut high_bound = Self::lane_pages(lanes.len() - 1) - 1;
+
+            while low_bound + 1 != high_bound {
+                let check = low_bound + (high_bound - low_bound) / 2;
+                println!(
+                    "low bound: {}, high bound: {}, check {}",
+                    low_bound, high_bound, check,
+                );
+
+                let page_ofs = PAGE_SIZE * check;
+
+                // is there a valid entry in this page?
+                for slot in 0..Self::entries_per_page() {
+                    let slot_ofs =
+                        page_ofs + slot * mem::size_of::<Entry<K, V>>();
+
+                    let ptr = last.as_ptr();
+
+                    let entry: &Entry<K, V> = unsafe {
+                        mem::transmute(ptr.offset(slot_ofs as isize))
+                    };
+
+                    if entry.valid() {
+                        low_bound = check;
+                        break;
+                    }
+                }
+                if low_bound != check {
+                    high_bound = check
+                }
+            }
+
+            num_pages = full_pages + high_bound;
+        }
+
+        // create the index
         let index = Index {
             lanes: UnsafeCell::new(lanes),
             path: PathBuf::from(path.as_ref()),
-            pages: Mutex::new(0),
+            pages: Mutex::new(num_pages as u64),
             _marker: PhantomData,
         };
-        // FIXME: support loading existing indicies
-        assert_eq!(index.new_page()?, 0);
+
+        // initialize index with at least one page
+        if num_pages == 0 {
+            assert_eq!(index.new_page()?, 0);
+        }
         Ok(index)
+    }
+
+    /// Returns how many pages have been allocated so far
+    pub fn pages(&self) -> usize {
+        *self.pages.lock() as usize
+    }
+
+    /// Returns how many pages fit into one lane
+    #[inline(always)]
+    fn lane_pages(n: usize) -> usize {
+        2_usize.pow(n as u32) * FIRST_LANE_PAGES
     }
 
     #[inline(always)]
@@ -169,24 +237,21 @@ impl<K: Hash + Copy + PartialEq + fmt::Debug, V: Hash + Copy + fmt::Debug>
     fn lane_page(page: usize) -> (usize, usize) {
         let usize_bits = mem::size_of::<usize>() * 8;
         let i = page / FIRST_LANE_PAGES + 1;
-        let row = usize_bits - i.leading_zeros() as usize - 1;
-        (row, page - (2usize.pow(row as u32) - 1) * FIRST_LANE_PAGES)
+        let lane = usize_bits - i.leading_zeros() as usize - 1;
+        let page = page - (2usize.pow(lane as u32) - 1) * FIRST_LANE_PAGES;
+        (lane, page)
     }
 
     fn new_lane(&self) -> io::Result<()> {
-        // FIXME, make exponential
         let lanes_ptr = self.lanes.get();
         let lane_nr = unsafe { (*lanes_ptr).len() };
 
-        let num_pages = 2_usize.pow(lane_nr as u32 + 1) * FIRST_LANE_PAGES;
+        let num_pages = Self::lane_pages(lane_nr);
 
         let mut path = self.path.clone();
         path.push(format!("{:02x}", lane_nr));
 
         let file_len = PAGE_SIZE as u64 * num_pages as u64;
-
-        // println!("creating file {:?} for {} pages", path, num_pages);
-        // println!("lane {} size {}", lane_nr, file_len);
 
         let file = OpenOptions::new()
             .read(true)
@@ -220,11 +285,6 @@ impl<K: Hash + Copy + PartialEq + fmt::Debug, V: Hash + Copy + fmt::Debug>
         // Get a reference to the `Entry`
         let page_ofs = PAGE_SIZE * page;
         let slot_ofs = page_ofs + slot * mem::size_of::<Entry<K, V>>();
-
-        // if slot_ofs > 30000 {
-        //     println!("lane page slot {} {} {}", lane, page, slot);
-        //     println!("get entry with slot_ofs: {}", slot_ofs);
-        // }
         unsafe {
             mem::transmute(
                 (*self.lanes.get())[lane].as_ptr().offset(slot_ofs as isize),
@@ -284,6 +344,8 @@ impl<K: Hash + Copy + PartialEq + fmt::Debug, V: Hash + Copy + fmt::Debug>
         }
     }
 
+    /// Inserts a key-value pair into the index, if the key is already
+    /// present, this is a no-op
     pub fn insert(&self, key: K, val: V) -> io::Result<()> {
         match self.find_key(&key)? {
             Found::Some(_) => {
@@ -356,6 +418,46 @@ mod tests {
         }
         for i in 0..N {
             assert_eq!(index.get(&i).unwrap(), Some(&i));
+        }
+    }
+
+    #[test]
+    fn reload() {
+        let dir = tempdir().unwrap();
+        let mut pages = 0;
+        {
+            {
+                let index_a = Index::new(&dir).unwrap();
+                for i in 0..N {
+                    index_a.insert(i, i).unwrap();
+                }
+                pages = index_a.pages();
+                mem::drop(index_a);
+            }
+
+            let index_b = Index::new(&dir).unwrap();
+
+            // make sure the page count matches
+            assert_eq!(pages, index_b.pages());
+
+            for i in 0..N {
+                assert_eq!(index_b.get(&i).unwrap(), Some(&i));
+            }
+
+            for i in N..N * 2 {
+                index_b.insert(i, i).unwrap();
+            }
+            pages = index_b.pages();
+            mem::drop(index_b);
+        }
+
+        let index_c = Index::new(&dir).unwrap();
+
+        // make sure the page count matches
+        assert_eq!(pages, index_c.pages());
+
+        for i in 0..N * 2 {
+            assert_eq!(index_c.get(&i).unwrap(), Some(&i));
         }
     }
 
