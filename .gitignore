@@ -1,2 +1,6 @@
-/target
+target/
 **/*.rs.bk
+Cargo.lock
+description/writing.html
+description/graphics.html
+description/style.css

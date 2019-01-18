@@ -1,8 +1,12 @@
 [package]
 authors = ["Kristoffer Ström <kristoffer@rymdkoloni.se>"]
 edition = "2018"
-name = "appendix2"
-version = "0.1.0"
+name = "appendix"
+version = "2.0.0"
+description = "Append-only, on-disk key-value index"
+documentation = "https://docs.rs/appendix/"
+keywords = ["index", "datastructure"]
+license = "GPL-3.0"
 
 [dependencies]
 arrayvec = "0.4.10"

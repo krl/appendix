@@ -1,5 +1,7 @@
+#![deny(missing_docs)]
+//! An append-only, on-disk key-value index with lockless reads
+
 use std::cell::UnsafeCell;
-use std::fmt;
 use std::fs::OpenOptions;
 use std::hash::{Hash, Hasher};
 use std::io;
@@ -23,7 +25,7 @@ const FIRST_LANE_PAGES: usize = 64;
 struct Shard;
 
 lazy_static! {
-    static ref LOCKS: ArrayVec<[Mutex<Shard>; NUM_SHARDS]> = {
+    static ref SHARDS: ArrayVec<[Mutex<Shard>; NUM_SHARDS]> = {
         let mut locks = ArrayVec::new();
         for _ in 0..NUM_SHARDS {
             locks.push(Mutex::new(Shard))
@@ -45,9 +47,10 @@ enum Found<'a, K, V> {
     Invalid(usize, usize, usize),
 }
 
+/// Marker type telling you your update was a no-op
 pub type AlreadyThere = bool;
 
-#[derive(Debug)]
+/// On-disk index structure mapping keys to values
 pub struct Index<K, V> {
     lanes: UnsafeCell<ArrayVec<[MmapMut; NUM_LANES]>>,
     path: PathBuf,
@@ -67,6 +70,7 @@ struct Entry<K, V> {
     next_checksum: u64,
 }
 
+// Wrapper reference for mutating entries, carrying a mutex guard
 struct EntryMut<'a, K, V> {
     entry: &'a mut Entry<K, V>,
     _lock: MutexGuard<'a, Shard>,
@@ -117,9 +121,8 @@ impl<K: Hash, V: Hash> Entry<K, V> {
     }
 }
 
-impl<K: Hash + Copy + PartialEq + fmt::Debug, V: Hash + Copy + fmt::Debug>
-    Index<K, V>
-{
+impl<K: Hash + Copy + PartialEq, V: Hash + Copy> Index<K, V> {
+    /// Create or load an index at `path`
     pub fn new<P: AsRef<Path>>(path: &P) -> io::Result<Self> {
         let mut lanes = ArrayVec::new();
 
@@ -134,7 +137,7 @@ impl<K: Hash + Copy + PartialEq + fmt::Debug, V: Hash + Copy + fmt::Debug>
 
                 let lane_pages = Self::lane_pages(n);
                 let file_len = PAGE_SIZE as u64 * lane_pages as u64;
-                file.set_len(file_len);
+                file.set_len(file_len)?;
                 unsafe { lanes.push(MmapMut::map_mut(&file)?) };
             }
         }
@@ -142,10 +145,10 @@ impl<K: Hash + Copy + PartialEq + fmt::Debug, V: Hash + Copy + fmt::Debug>
         // find the number of already occupied pages
         let mut num_pages = 0;
         if let Some(last) = lanes.last() {
-            // help the type inferer along a bit.
+            // help the type inferance along a bit.
             let last: &MmapMut = last;
 
-            // add up pages of all but the last lane, since they are all full
+            // add up pages of all but the last lane, since they must all be full
             let mut full_pages = 0;
             for n in 0..lanes.len().saturating_sub(1) {
                 println!("lane {}, pages {}", n, Self::lane_pages(n));
@@ -281,6 +284,7 @@ impl<K: Hash + Copy + PartialEq + fmt::Debug, V: Hash + Copy + fmt::Debug>
         Ok(new_page_nr)
     }
 
+    // Get a mutable reference to the `Entry`,
     fn entry(&self, lane: usize, page: usize, slot: usize) -> &Entry<K, V> {
         // Get a reference to the `Entry`
         let page_ofs = PAGE_SIZE * page;
@@ -302,7 +306,7 @@ impl<K: Hash + Copy + PartialEq + fmt::Debug, V: Hash + Copy + fmt::Debug>
     ) -> EntryMut<K, V> {
         let shard = (page ^ slot) % NUM_SHARDS;
         // Lock the entry for writing
-        let lock = LOCKS[shard].lock();
+        let lock = SHARDS[shard].lock();
 
         let page_ofs = PAGE_SIZE * page;
         let slot_ofs = page_ofs + slot * mem::size_of::<Entry<K, V>>();
@@ -318,6 +322,7 @@ impl<K: Hash + Copy + PartialEq + fmt::Debug, V: Hash + Copy + fmt::Debug>
         }
     }
 
+    // Traverse the tree to find the entry for this key
     fn find_key(&self, k: &K) -> io::Result<Found<K, V>> {
         let mut depth = 0;
         let mut abs_page = 0;
@@ -346,11 +351,11 @@ impl<K: Hash + Copy + PartialEq + fmt::Debug, V: Hash + Copy + fmt::Debug>
 
     /// Inserts a key-value pair into the index, if the key is already
     /// present, this is a no-op
-    pub fn insert(&self, key: K, val: V) -> io::Result<()> {
+    pub fn insert(&self, key: K, val: V) -> io::Result<AlreadyThere> {
         match self.find_key(&key)? {
             Found::Some(_) => {
                 // no-op
-                Ok(())
+                Ok(true)
             }
             Found::Invalid(lane, page, slot) => {
                 let mut entry = self.entry_mut(lane, page, slot);
@@ -364,7 +369,7 @@ impl<K: Hash + Copy + PartialEq + fmt::Debug, V: Hash + Copy + fmt::Debug>
                     self.insert(key, val)
                 } else {
                     *entry = Entry::new(key, val);
-                    return Ok(());
+                    return Ok(false);
                 }
             }
             Found::None(lane, page, slot) => {
@@ -381,6 +386,7 @@ impl<K: Hash + Copy + PartialEq + fmt::Debug, V: Hash + Copy + fmt::Debug>
         }
     }
 
+    /// Looks up a value with `key` in the index
     pub fn get(&self, key: &K) -> io::Result<Option<&V>> {
         match self.find_key(key)? {
             Found::Some(entry) => Ok(Some(&entry.val)),
@@ -424,7 +430,7 @@ mod tests {
     #[test]
     fn reload() {
         let dir = tempdir().unwrap();
-        let mut pages = 0;
+        let mut pages;
         {
             {
                 let index_a = Index::new(&dir).unwrap();
@@ -463,6 +469,12 @@ mod tests {
 
     const N_THREADS: usize = 8;
 
+    // The stress test creates an index, and simultaneously writes
+    // entries in random order from `N_THREADS` threads,
+    // while at the same time reading from an equal amount of threads.
+    //
+    // When all threads are finished, a final read-through is made to see
+    // that all key value pairs are present.
     #[test]
     fn stress() {
         let dir = tempdir().unwrap();
@@ -501,7 +513,7 @@ mod tests {
             // write threads
             threads_running.push(thread::spawn(move || {
                 for write in shuffle_write {
-                    index_write.insert(write, write).unwrap()
+                    index_write.insert(write, write).unwrap();
                 }
             }));
 
