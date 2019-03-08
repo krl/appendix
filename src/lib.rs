@@ -2,7 +2,7 @@
 //! An append-only, on-disk key-value index with lockless reads
 
 use std::cell::UnsafeCell;
-use std::fs::OpenOptions;
+use std::fs::{OpenOptions, remove_file};
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::marker::PhantomData;
@@ -392,6 +392,22 @@ impl<K: Hash + Copy + PartialEq, V: Hash + Copy> Index<K, V> {
             Found::Some(entry) => Ok(Some(&entry.val)),
             _ => Ok(None),
         }
+    }
+
+    /// Removes all data from disk
+    pub fn purge(&mut self) -> std::io::Result<()> {
+        self.lanes = UnsafeCell::new(ArrayVec::new());
+        for n in 0..NUM_LANES {
+            let mut pathbuf = PathBuf::from(&self.path);
+            pathbuf.push(&format!("{:02x}", n));
+            if pathbuf.exists() {
+                match remove_file(&pathbuf) {
+                    Ok(_x) => {},
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+        Ok(())
     }
 }
 
