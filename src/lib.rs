@@ -58,8 +58,18 @@ pub struct Index<K, V> {
     _marker: PhantomData<(K, V)>,
 }
 
-unsafe impl<K, V> Send for Index<K, V> {}
-unsafe impl<K, V> Sync for Index<K, V> {}
+unsafe impl<K, V> Send for Index<K, V>
+where
+    K: Send,
+    V: Send,
+{
+}
+unsafe impl<K, V> Sync for Index<K, V>
+where
+    K: Sync,
+    V: Sync,
+{
+}
 
 #[derive(Debug)]
 #[repr(C)]
@@ -152,7 +162,6 @@ impl<K: Hash + Copy + PartialEq, V: Hash + Copy> Index<K, V> {
             // add up pages of all but the last lane, since they must all be full
             let mut full_pages = 0;
             for n in 0..lanes.len().saturating_sub(1) {
-                println!("lane {}, pages {}", n, Self::lane_pages(n));
                 full_pages += Self::lane_pages(n)
             }
 
@@ -162,11 +171,6 @@ impl<K: Hash + Copy + PartialEq, V: Hash + Copy> Index<K, V> {
 
             while low_bound + 1 != high_bound {
                 let check = low_bound + (high_bound - low_bound) / 2;
-                println!(
-                    "low bound: {}, high bound: {}, check {}",
-                    low_bound, high_bound, check,
-                );
-
                 let page_ofs = PAGE_SIZE * check;
 
                 // is there a valid entry in this page?
@@ -395,6 +399,17 @@ impl<K: Hash + Copy + PartialEq, V: Hash + Copy> Index<K, V> {
         }
     }
 
+    /// Syncronizes and flushes data to disk
+    pub fn flush(&mut self) -> std::io::Result<()> {
+        unsafe {
+            let lanes = &mut *self.lanes.get();
+            for mmap in lanes {
+                mmap.flush()?;
+            }
+        }
+        Ok(())
+    }
+
     /// Get the approximate size on disk for the index
     pub fn on_disk_size(&self) -> usize {
         *self.pages.lock() as usize * PAGE_SIZE
@@ -432,7 +447,6 @@ mod tests {
         for i in 0..N {
             assert_eq!(index.get(&i).unwrap(), Some(&i));
         }
-        println!("{}", index.on_disk_size());
     }
 
     #[test]
@@ -472,6 +486,33 @@ mod tests {
 
         for i in 0..N * 2 {
             assert_eq!(index_c.get(&i).unwrap(), Some(&i));
+        }
+    }
+
+    #[test]
+    fn purge() {
+        let dir = tempdir().unwrap();
+        let mut index = Index::new(&dir).unwrap();
+
+        for i in 0..N {
+            index.insert(i, i).unwrap();
+        }
+        for i in 0..N {
+            assert_eq!(index.get(&i).unwrap(), Some(&i));
+        }
+
+        index.purge().unwrap();
+
+        for i in 0..N {
+            assert_eq!(index.get(&i).unwrap(), None);
+        }
+
+        // repopulate
+        for i in 0..N {
+            index.insert(i, i).unwrap();
+        }
+        for i in 0..N {
+            assert_eq!(index.get(&i).unwrap(), Some(&i));
         }
     }
 
