@@ -62,6 +62,7 @@ unsafe impl<K, V> Send for Index<K, V> {}
 unsafe impl<K, V> Sync for Index<K, V> {}
 
 #[derive(Debug)]
+#[repr(C)]
 struct Entry<K, V> {
     key: K,
     val: V,
