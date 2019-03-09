@@ -518,16 +518,16 @@ mod tests {
             let shuffle_write = mem::replace(&mut shuffles_write[i], vec![]);
             let index_write = index.clone();
 
+            // shuffled reads
+            let shuffle_read = mem::replace(&mut shuffles_read[i], vec![]);
+            let index_read = index.clone();
+
             // write threads
             threads_running.push(thread::spawn(move || {
                 for write in shuffle_write {
                     index_write.insert(write, write).unwrap();
                 }
             }));
-
-            // shuffled reads
-            let shuffle_read = mem::replace(&mut shuffles_read[i], vec![]);
-            let index_read = index.clone();
 
             // read threads
             threads_running.push(thread::spawn(move || {
