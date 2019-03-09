@@ -2,7 +2,7 @@
 //! An append-only, on-disk key-value index with lockless reads
 
 use std::cell::UnsafeCell;
-use std::fs::OpenOptions;
+use std::fs::{remove_file, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::marker::PhantomData;
@@ -395,6 +395,19 @@ impl<K: Hash + Copy + PartialEq, V: Hash + Copy> Index<K, V> {
         }
     }
 
+    /// Removes all data from disk
+    pub fn purge(&mut self) -> std::io::Result<()> {
+        for n in 0..NUM_LANES {
+            let mut pathbuf = PathBuf::from(&self.path);
+            pathbuf.push(&format!("{:02x}", n));
+            if pathbuf.exists() {
+                remove_file(&pathbuf)?
+            }
+        }
+        *self = Self::new(&self.path)?;
+        Ok(())
+    }
+
     /// Get the approximate size on disk for the index
     pub fn on_disk_size(&self) -> usize {
         *self.pages.lock() as usize * PAGE_SIZE
@@ -472,6 +485,33 @@ mod tests {
 
         for i in 0..N * 2 {
             assert_eq!(index_c.get(&i).unwrap(), Some(&i));
+        }
+    }
+
+    #[test]
+    fn purge() {
+        let dir = tempdir().unwrap();
+        let mut index = Index::new(&dir).unwrap();
+
+        for i in 0..N {
+            index.insert(i, i).unwrap();
+        }
+        for i in 0..N {
+            assert_eq!(index.get(&i).unwrap(), Some(&i));
+        }
+
+        index.purge().unwrap();
+
+        for i in 0..N {
+            assert_eq!(index.get(&i).unwrap(), None);
+        }
+
+        // repopulate
+        for i in 0..N {
+            index.insert(i, i).unwrap();
+        }
+        for i in 0..N {
+            assert_eq!(index.get(&i).unwrap(), Some(&i));
         }
     }
 
