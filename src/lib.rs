@@ -394,6 +394,11 @@ impl<K: Hash + Copy + PartialEq, V: Hash + Copy> Index<K, V> {
             _ => Ok(None),
         }
     }
+
+    /// Get the approximate size on disk for the index
+    pub fn on_disk_size(&self) -> usize {
+        *self.pages.lock() as usize * PAGE_SIZE
+    }
 }
 
 #[cfg(test)]
@@ -412,6 +417,7 @@ mod tests {
         let index = Index::new(&dir).unwrap();
         index.insert(0, 0).unwrap();
         assert_eq!(index.get(&0).unwrap(), Some(&0));
+        assert_eq!(index.on_disk_size(), PAGE_SIZE);
     }
 
     const N: u64 = 1024 * 256;
@@ -426,6 +432,7 @@ mod tests {
         for i in 0..N {
             assert_eq!(index.get(&i).unwrap(), Some(&i));
         }
+        println!("{}", index.on_disk_size());
     }
 
     #[test]
