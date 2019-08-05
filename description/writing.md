@@ -101,6 +101,5 @@ For comments: [Reddit post](https://www.reddit.com/r/rust/comments/aiyzco/writin
 
 Kristoffer Ström *<kristoffer@rymdkoloni.se>*
 
-*PS. I am currently looking for employment in the Berlin area or freelance work.*
 
 
