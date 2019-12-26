@@ -152,7 +152,6 @@ impl<K: Hash + Copy + PartialEq, V: Hash + Copy> Index<K, V> {
             // add up pages of all but the last lane, since they must all be full
             let mut full_pages = 0;
             for n in 0..lanes.len().saturating_sub(1) {
-                println!("lane {}, pages {}", n, Self::lane_pages(n));
                 full_pages += Self::lane_pages(n)
             }
 
@@ -162,11 +161,6 @@ impl<K: Hash + Copy + PartialEq, V: Hash + Copy> Index<K, V> {
 
             while low_bound + 1 != high_bound {
                 let check = low_bound + (high_bound - low_bound) / 2;
-                println!(
-                    "low bound: {}, high bound: {}, check {}",
-                    low_bound, high_bound, check,
-                );
-
                 let page_ofs = PAGE_SIZE * check;
 
                 // is there a valid entry in this page?
@@ -445,7 +439,6 @@ mod tests {
         for i in 0..N {
             assert_eq!(index.get(&i).unwrap(), Some(&i));
         }
-        println!("{}", index.on_disk_size());
     }
 
     #[test]
