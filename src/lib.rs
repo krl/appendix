@@ -389,6 +389,17 @@ impl<K: Hash + Copy + PartialEq, V: Hash + Copy> Index<K, V> {
         }
     }
 
+    /// Syncronizes and flushes data to disk
+    pub fn flush(&mut self) -> std::io::Result<()> {
+        unsafe {
+            let lanes = &mut *self.lanes.get();
+            for mmap in lanes {
+                mmap.flush()?;
+            }
+        }
+        Ok(())
+    }
+
     /// Removes all data from disk
     pub fn purge(&mut self) -> std::io::Result<()> {
         for n in 0..NUM_LANES {
