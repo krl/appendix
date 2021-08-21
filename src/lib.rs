@@ -58,8 +58,18 @@ pub struct Index<K, V> {
     _marker: PhantomData<(K, V)>,
 }
 
-unsafe impl<K, V> Send for Index<K, V> {}
-unsafe impl<K, V> Sync for Index<K, V> {}
+unsafe impl<K, V> Send for Index<K, V>
+where
+    K: Send,
+    V: Send,
+{
+}
+unsafe impl<K, V> Sync for Index<K, V>
+where
+    K: Sync,
+    V: Sync,
+{
+}
 
 #[derive(Debug)]
 #[repr(C)]
