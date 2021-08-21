@@ -5,8 +5,11 @@ edition = "2018"
 name = "appendix"
 version = "0.2.1"
 description = "Append-only, on-disk key-value index"
+homepage = "https://github.com/krl/appendix"
+repository = "https://github.com/krl/appendix"
 documentation = "https://docs.rs/appendix/"
-keywords = ["index", "datastructure"]
+readme = "README.md"
+keywords = ["index", "datastructure", "append-only"]
 license = "GPL-3.0"
 
 [dependencies]
