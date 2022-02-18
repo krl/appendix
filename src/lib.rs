@@ -489,33 +489,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn purge() {
-        let dir = tempdir().unwrap();
-        let mut index = Index::new(&dir).unwrap();
-
-        for i in 0..N {
-            index.insert(i, i).unwrap();
-        }
-        for i in 0..N {
-            assert_eq!(index.get(&i).unwrap(), Some(&i));
-        }
-
-        index.purge().unwrap();
-
-        for i in 0..N {
-            assert_eq!(index.get(&i).unwrap(), None);
-        }
-
-        // repopulate
-        for i in 0..N {
-            index.insert(i, i).unwrap();
-        }
-        for i in 0..N {
-            assert_eq!(index.get(&i).unwrap(), Some(&i));
-        }
-    }
-
     const N_THREADS: usize = 8;
 
     // The stress test creates an index, and simultaneously writes
