@@ -1,6 +1,8 @@
 #![deny(missing_docs)]
 //! An append-only, on-disk key-value index with lockless reads
 
+use bytemuck::Pod;
+
 use std::cell::UnsafeCell;
 use std::fs::OpenOptions;
 use std::hash::{Hash, Hasher};
@@ -132,7 +134,11 @@ impl<K: Hash, V: Hash> Entry<K, V> {
     }
 }
 
-impl<K: Hash + Copy + PartialEq, V: Hash + Copy> Index<K, V> {
+impl<K, V> Index<K, V>
+where
+    K: Pod + Hash + Copy + PartialEq,
+    V: Pod + Hash + Copy,
+{
     /// Create or load an index at `path`
     pub fn new<P: AsRef<Path>>(path: &P) -> io::Result<Self> {
         let mut lanes = ArrayVec::new();
